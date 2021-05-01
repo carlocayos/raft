@@ -2,8 +2,14 @@ package raft
 
 import (
 	"bytes"
+	"fmt"
+	"github.com/hashicorp/go-hclog"
+	"github.com/stretchr/testify/require"
+	"net"
 	"reflect"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -18,7 +24,7 @@ func (t *testAddrProvider) ServerAddr(id ServerID) (ServerAddress, error) {
 
 func TestNetworkTransport_CloseStreams(t *testing.T) {
 	// Transport 1 is consumer
-	trans1, err := NewTCPTransportWithLogger("127.0.0.1:0", nil, 2, time.Second, newTestLogger(t))
+	trans1, err := NewTCPTransportWithLogger("localhost:0", nil, 2, time.Second, newTestLogger(t))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -32,7 +38,7 @@ func TestNetworkTransport_CloseStreams(t *testing.T) {
 		PrevLogEntry: 100,
 		PrevLogTerm:  4,
 		Entries: []*Log{
-			&Log{
+			{
 				Index: 101,
 				Term:  4,
 				Type:  LogNoop,
@@ -65,13 +71,13 @@ func TestNetworkTransport_CloseStreams(t *testing.T) {
 	}()
 
 	// Transport 2 makes outbound request, 3 conn pool
-	trans2, err := NewTCPTransportWithLogger("127.0.0.1:0", nil, 3, time.Second, newTestLogger(t))
+	trans2, err := NewTCPTransportWithLogger("localhost:0", nil, 3, time.Second, newTestLogger(t))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	defer trans2.Close()
-
-	for i := 0; i < 2; i++ {
+	var i int
+	for i = 0; i < 2; i++ {
 		// Create wait group
 		wg := &sync.WaitGroup{}
 		wg.Add(5)
@@ -90,7 +96,7 @@ func TestNetworkTransport_CloseStreams(t *testing.T) {
 		}
 
 		// Try to do parallel appends, should stress the conn pool
-		for i := 0; i < 5; i++ {
+		for i = 0; i < 5; i++ {
 			go appendFunc()
 		}
 
@@ -113,7 +119,7 @@ func TestNetworkTransport_CloseStreams(t *testing.T) {
 }
 
 func TestNetworkTransport_StartStop(t *testing.T) {
-	trans, err := NewTCPTransportWithLogger("127.0.0.1:0", nil, 2, time.Second, newTestLogger(t))
+	trans, err := NewTCPTransportWithLogger("localhost:0", nil, 2, time.Second, newTestLogger(t))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -122,7 +128,7 @@ func TestNetworkTransport_StartStop(t *testing.T) {
 
 func TestNetworkTransport_Heartbeat_FastPath(t *testing.T) {
 	// Transport 1 is consumer
-	trans1, err := NewTCPTransportWithLogger("127.0.0.1:0", nil, 2, time.Second, newTestLogger(t))
+	trans1, err := NewTCPTransportWithLogger("localhost:0", nil, 2, time.Second, newTestLogger(t))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -153,7 +159,7 @@ func TestNetworkTransport_Heartbeat_FastPath(t *testing.T) {
 	trans1.SetHeartbeatHandler(fastpath)
 
 	// Transport 2 makes outbound request
-	trans2, err := NewTCPTransportWithLogger("127.0.0.1:0", nil, 2, time.Second, newTestLogger(t))
+	trans2, err := NewTCPTransportWithLogger("localhost:0", nil, 2, time.Second, newTestLogger(t))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -179,7 +185,7 @@ func TestNetworkTransport_AppendEntries(t *testing.T) {
 
 	for _, useAddrProvider := range []bool{true, false} {
 		// Transport 1 is consumer
-		trans1, err := makeTransport(t, useAddrProvider, "127.0.0.1:0")
+		trans1, err := makeTransport(t, useAddrProvider, "localhost:0")
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -193,7 +199,7 @@ func TestNetworkTransport_AppendEntries(t *testing.T) {
 			PrevLogEntry: 100,
 			PrevLogTerm:  4,
 			Entries: []*Log{
-				&Log{
+				{
 					Index: 101,
 					Term:  4,
 					Type:  LogNoop,
@@ -248,7 +254,7 @@ func TestNetworkTransport_AppendEntriesPipeline(t *testing.T) {
 
 	for _, useAddrProvider := range []bool{true, false} {
 		// Transport 1 is consumer
-		trans1, err := makeTransport(t, useAddrProvider, "127.0.0.1:0")
+		trans1, err := makeTransport(t, useAddrProvider, "localhost:0")
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -262,7 +268,7 @@ func TestNetworkTransport_AppendEntriesPipeline(t *testing.T) {
 			PrevLogEntry: 100,
 			PrevLogTerm:  4,
 			Entries: []*Log{
-				&Log{
+				{
 					Index: 101,
 					Term:  4,
 					Type:  LogNoop,
@@ -331,7 +337,7 @@ func TestNetworkTransport_AppendEntriesPipeline(t *testing.T) {
 
 func TestNetworkTransport_AppendEntriesPipeline_CloseStreams(t *testing.T) {
 	// Transport 1 is consumer
-	trans1, err := makeTransport(t, true, "127.0.0.1:0")
+	trans1, err := makeTransport(t, true, "localhost:0")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -345,7 +351,7 @@ func TestNetworkTransport_AppendEntriesPipeline_CloseStreams(t *testing.T) {
 		PrevLogEntry: 100,
 		PrevLogTerm:  4,
 		Entries: []*Log{
-			&Log{
+			{
 				Index: 101,
 				Term:  4,
 				Type:  LogNoop,
@@ -440,7 +446,7 @@ func TestNetworkTransport_RequestVote(t *testing.T) {
 
 	for _, useAddrProvider := range []bool{true, false} {
 		// Transport 1 is consumer
-		trans1, err := makeTransport(t, useAddrProvider, "127.0.0.1:0")
+		trans1, err := makeTransport(t, useAddrProvider, "localhost:0")
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -499,7 +505,7 @@ func TestNetworkTransport_InstallSnapshot(t *testing.T) {
 
 	for _, useAddrProvider := range []bool{true, false} {
 		// Transport 1 is consumer
-		trans1, err := makeTransport(t, useAddrProvider, "127.0.0.1:0")
+		trans1, err := makeTransport(t, useAddrProvider, "localhost:0")
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -570,7 +576,7 @@ func TestNetworkTransport_InstallSnapshot(t *testing.T) {
 
 func TestNetworkTransport_EncodeDecode(t *testing.T) {
 	// Transport 1 is consumer
-	trans1, err := NewTCPTransportWithLogger("127.0.0.1:0", nil, 2, time.Second, newTestLogger(t))
+	trans1, err := NewTCPTransportWithLogger("localhost:0", nil, 2, time.Second, newTestLogger(t))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -586,9 +592,9 @@ func TestNetworkTransport_EncodeDecode(t *testing.T) {
 }
 
 func TestNetworkTransport_EncodeDecode_AddressProvider(t *testing.T) {
-	addressOverride := "127.0.0.1:11111"
+	addressOverride := "localhost:11111"
 	config := &NetworkTransportConfig{MaxPool: 2, Timeout: time.Second, Logger: newTestLogger(t), ServerAddressProvider: &testAddrProvider{addressOverride}}
-	trans1, err := NewTCPTransportWithConfig("127.0.0.1:0", nil, config)
+	trans1, err := NewTCPTransportWithConfig("localhost:0", nil, config)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -605,7 +611,7 @@ func TestNetworkTransport_EncodeDecode_AddressProvider(t *testing.T) {
 
 func TestNetworkTransport_PooledConn(t *testing.T) {
 	// Transport 1 is consumer
-	trans1, err := NewTCPTransportWithLogger("127.0.0.1:0", nil, 2, time.Second, newTestLogger(t))
+	trans1, err := NewTCPTransportWithLogger("localhost:0", nil, 2, time.Second, newTestLogger(t))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -619,7 +625,7 @@ func TestNetworkTransport_PooledConn(t *testing.T) {
 		PrevLogEntry: 100,
 		PrevLogTerm:  4,
 		Entries: []*Log{
-			&Log{
+			{
 				Index: 101,
 				Term:  4,
 				Type:  LogNoop,
@@ -652,7 +658,7 @@ func TestNetworkTransport_PooledConn(t *testing.T) {
 	}()
 
 	// Transport 2 makes outbound request, 3 conn pool
-	trans2, err := NewTCPTransportWithLogger("127.0.0.1:0", nil, 3, time.Second, newTestLogger(t))
+	trans2, err := NewTCPTransportWithLogger("localhost:0", nil, 3, time.Second, newTestLogger(t))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -693,7 +699,95 @@ func TestNetworkTransport_PooledConn(t *testing.T) {
 func makeTransport(t *testing.T, useAddrProvider bool, addressOverride string) (*NetworkTransport, error) {
 	if useAddrProvider {
 		config := &NetworkTransportConfig{MaxPool: 2, Timeout: time.Second, Logger: newTestLogger(t), ServerAddressProvider: &testAddrProvider{addressOverride}}
-		return NewTCPTransportWithConfig("127.0.0.1:0", nil, config)
+		return NewTCPTransportWithConfig("localhost:0", nil, config)
 	}
-	return NewTCPTransportWithLogger("127.0.0.1:0", nil, 2, time.Second, newTestLogger(t))
+	return NewTCPTransportWithLogger("localhost:0", nil, 2, time.Second, newTestLogger(t))
+}
+
+type testCountingWriter struct {
+	t        *testing.T
+	numCalls *int32
+}
+
+func (tw testCountingWriter) Write(p []byte) (n int, err error) {
+	atomic.AddInt32(tw.numCalls, 1)
+	if !strings.Contains(string(p), "failed to accept connection") {
+		tw.t.Error("did not receive expected log message")
+	}
+	tw.t.Log("countingWriter:", string(p))
+	return len(p), nil
+}
+
+type testCountingStreamLayer struct {
+	numCalls *int32
+}
+
+func (sl testCountingStreamLayer) Accept() (net.Conn, error) {
+	*sl.numCalls++
+	return nil, fmt.Errorf("intentional error in test")
+}
+
+func (sl testCountingStreamLayer) Close() error {
+	return nil
+}
+
+func (sl testCountingStreamLayer) Addr() net.Addr {
+	panic("not needed")
+}
+
+func (sl testCountingStreamLayer) Dial(address ServerAddress, timeout time.Duration) (net.Conn, error) {
+	return nil, fmt.Errorf("not needed")
+}
+
+// TestNetworkTransport_ListenBackoff tests that Accept() errors in NetworkTransport#listen()
+// do not result in a tight loop and spam the log. We verify this here by counting the number
+// of calls against Accept() and the logger
+func TestNetworkTransport_ListenBackoff(t *testing.T) {
+
+	// testTime is the amount of time we will allow NetworkTransport#listen() to run
+	// This needs to be long enough that to verify that maxDelay is in force,
+	// but not so long as to be obnoxious when running the test suite.
+	const testTime = 4 * time.Second
+
+	var numAccepts int32
+	var numLogs int32
+	countingWriter := testCountingWriter{t, &numLogs}
+	countingLogger := hclog.New(&hclog.LoggerOptions{
+		Name:   "test",
+		Output: countingWriter,
+		Level:  hclog.DefaultLevel,
+	})
+	transport := NetworkTransport{
+		logger:     countingLogger,
+		stream:     testCountingStreamLayer{&numAccepts},
+		shutdownCh: make(chan struct{}),
+	}
+
+	go transport.listen()
+
+	// sleep (+yield) for testTime seconds before asking the accept loop to shut down
+	time.Sleep(testTime)
+	transport.Close()
+
+	// Verify that the method exited (but without block this test)
+	// maxDelay == 1s, so we will give the routine 1.25s to loop around and shut down.
+	select {
+	case <-transport.shutdownCh:
+	case <-time.After(1250 * time.Millisecond):
+		t.Error("timed out waiting for NetworkTransport to shut down")
+	}
+	require.True(t, transport.shutdown)
+
+	// In testTime==4s, we expect to loop approximately 12 times
+	// with the following delays (in ms):
+	//   0+5+10+20+40+80+160+320+640+1000+1000+1000 == 4275 ms
+	// Too few calls suggests that the minDelay is not in force; too many calls suggests that the
+	// maxDelay is not in force or that the back-off isn't working at all.
+	// We'll leave a little flex; the important thing here is the asymptotic behavior.
+	// If the minDelay or maxDelay in NetworkTransport#listen() are modified, this test may fail
+	// and need to be adjusted.
+	require.True(t, numAccepts > 10)
+	require.True(t, numAccepts < 13)
+	require.True(t, numLogs > 10)
+	require.True(t, numLogs < 13)
 }
